@@ -89,15 +89,21 @@ ConfigVariableBool verify_lods
           "mode (the variable is ignored in a production build)."));
 
 ConfigVariableInt parallax_mapping_samples
-("parallax-mapping-samples", 3,
- PRC_DESC("Sets the amount of samples to use in the parallax mapping "
-          "implementation. A value of 0 means to disable it entirely."));
+("parallax-mapping-samples", 8,
+ PRC_DESC("Sets the number of layers used by the parallax occlusion mapping "
+          "implementation.  More layers reduce banding and improve the "
+          "accuracy of the occlusion at the cost of additional texture "
+          "lookups.  A value of 0 or less disables parallax mapping "
+          "entirely."));
 
 ConfigVariableDouble parallax_mapping_scale
 ("parallax-mapping-scale", 0.1,
- PRC_DESC("Sets the strength of the effect of parallax mapping, that is, "
-          "how much influence the height values have on the texture "
-          "coordinates."));
+ PRC_DESC("Sets the height of the parallax mapping effect, expressed as a "
+          "fraction of the texture coordinate range.  The height map is "
+          "expected to contain 0 at the base surface and 1 at the highest "
+          "point.  Parallax mapping requires per-vertex normal, tangent and "
+          "binormal attributes for the texture coordinate set used by the "
+          "height map."));
 
 /**
  * Initializes the library.  This must be called at least once before any of

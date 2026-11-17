@@ -2,7 +2,8 @@
 #
 # Bump mapping is a way of making polygonal surfaces look
 # less flat.  This sample uses normal mapping for all
-# surfaces, and also parallax mapping for the column.
+# surfaces, and also parallax occlusion mapping (POM) for
+# the column.
 #
 # This is a tutorial to show how to do normal mapping
 # in panda3d using the Shader Generator.
@@ -39,9 +40,10 @@ def addTitle(text):
 class BumpMapDemo(ShowBase):
 
     def __init__(self):
-        # Configure the parallax mapping settings (these are just the defaults)
-        loadPrcFileData("", "parallax-mapping-samples 3\n"
-                            "parallax-mapping-scale 0.1")
+        # Use more layers than the default for a smoother occlusion effect.
+        # The height map is stored in the alpha channel of the normal map.
+        loadPrcFileData("", "parallax-mapping-samples 16\n"
+                            "parallax-mapping-scale 0.08")
 
         # Initialize the ShowBase class from which we inherit, which will
         # create a window and set up everything we need for rendering into it.
@@ -54,7 +56,7 @@ class BumpMapDemo(ShowBase):
             return
 
         # Post the instructions
-        self.title = addTitle("Panda3D: Tutorial - Bump Mapping")
+        self.title = addTitle("Panda3D: Tutorial - Parallax Occlusion Mapping")
         self.inst1 = addInstructions(0.06, "Press ESC to exit")
         self.inst2 = addInstructions(0.12, "Move mouse to rotate camera")
         self.inst3 = addInstructions(0.18, "Left mouse button: Move forwards")

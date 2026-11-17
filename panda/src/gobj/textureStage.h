@@ -57,10 +57,10 @@ PUBLISHED:
     // Modes that are only relevant to shader-based rendering.
 
     M_normal,
-    M_normal_height,
+    M_normal_height, // Normal in RGB, height in alpha.
     M_glow,         // Rarely used: modulate_glow  is more efficient.
     M_gloss,        // Rarely used: modulate_gloss is more efficient.
-    M_height,       // Rarely used: normal_height  is more efficient.
+    M_height,       // Height in RGB; normal_height is more efficient.
     M_metallic_roughness, // metalness in B, roughness in G
     M_normal_gloss,
 

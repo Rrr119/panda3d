@@ -179,6 +179,12 @@ protected:
   static std::string combine_source_as_string(const ShaderKey::TextureInfo &info,
                                          short num, bool alpha, short texindex);
   static const char *texture_type_as_string(Texture::TextureType ttype);
+  static std::string texture_sample_as_string(const ShaderKey::TextureInfo &info,
+                                              short texindex,
+                                              const std::string &texcoord);
+  static std::string height_sample_as_string(const ShaderKey::TextureInfo &info,
+                                             short texindex,
+                                             const std::string &texcoord);
 
 public:
   static TypeHandle get_class_type() {

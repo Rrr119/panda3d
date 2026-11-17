@@ -396,7 +396,7 @@ analyze_renderstate(ShaderKey &key, const RenderState *rs) {
       break;
 
     case TextureStage::M_normal_height:
-      if (parallax_mapping_samples == 0) {
+      if (parallax_mapping_samples <= 0) {
         info._mode = TextureStage::M_normal;
       } else if (!shader_attrib->auto_normal_on() ||
                  (key._lights.empty() && (key._outputs & AuxBitplaneAttrib::ABO_aux_normal) == 0)) {
@@ -483,7 +483,9 @@ analyze_renderstate(ShaderKey &key, const RenderState *rs) {
       break;
     case TextureStage::M_height:
       if (parallax_mapping_samples > 0) {
-        info._flags = ShaderKey::TF_map_height;
+        // Preserve TF_has_alpha, since this may be a normal_height stage that
+        // was downgraded to a height-only stage above.
+        info._flags |= ShaderKey::TF_map_height;
       } else {
         skip = true;
       }
@@ -783,6 +785,7 @@ synthesize_shader(const RenderState *rs, const GeomVertexAnimationSpec &anim) {
   int map_index_glow = -1;
   int map_index_gloss = -1;
   int map_index_emission = -1;
+  int map_index_height = -1;
 
   // Figure out whether we need to calculate any of these variables.
   bool need_world_position = (key._num_clip_planes > 0);
@@ -892,7 +895,14 @@ synthesize_shader(const RenderState *rs, const GeomVertexAnimationSpec &anim) {
     if (tex._flags & ShaderKey::TF_map_emission) {
       map_index_emission = i;
     }
+    if ((tex._flags & ShaderKey::TF_map_height) != 0 &&
+        map_index_height < 0) {
+      // The shader generator supports a single height map per polygon.
+      map_index_height = i;
+    }
   }
+  bool use_parallax = (map_index_height >= 0 &&
+                       parallax_mapping_samples > 0);
   if (need_tangents) {
     tangent_freg = alloc_freg();
     binormal_freg = alloc_freg();
@@ -1069,9 +1079,9 @@ synthesize_shader(const RenderState *rs, const GeomVertexAnimationSpec &anim) {
   }
   if (key._texture_flags & ShaderKey::TF_map_height) {
     text << "\t float3 eyedir = mspos_view.xyz - vtx_position.xyz;\n";
-    text << "\t l_eyevec.x = dot(vtx_" << tangent_input << ".xyz, eyedir);\n";
-    text << "\t l_eyevec.y = dot(vtx_" << binormal_input << ".xyz, eyedir);\n";
-    text << "\t l_eyevec.z = dot(vtx_normal, eyedir);\n";
+    text << "\t l_eyevec.x = dot(normalize(vtx_" << tangent_input << ".xyz), eyedir);\n";
+    text << "\t l_eyevec.y = dot(normalize(vtx_" << binormal_input << ".xyz), eyedir);\n";
+    text << "\t l_eyevec.z = dot(normalize(vtx_normal), eyedir);\n";
     text << "\t l_eyevec = normalize(l_eyevec);\n";
   }
   if (need_eye_normal) {
@@ -1291,14 +1301,75 @@ synthesize_shader(const RenderState *rs, const GeomVertexAnimationSpec &anim) {
       text << "\t texcoord" << i << ".xyz /= texcoord" << i << ".w;\n";
     }
   }
-  text << "\t // Fetch all textures.\n";
-  for (size_t i = 0; i < key._textures.size(); ++i) {
-    const ShaderKey::TextureInfo &tex = key._textures[i];
-    if ((tex._flags & ShaderKey::TF_map_height) == 0) {
-      continue;
+  if (use_parallax) {
+    const ShaderKey::TextureInfo &height_tex = key._textures[map_index_height];
+    int num_samples = parallax_mapping_samples;
+
+    text << "\t // Parallax occlusion mapping.  The view direction and the\n";
+    text << "\t // tangent/binormal/normal basis are in model space, so their\n";
+    text << "\t // dot products give a tangent-space view direction.\n";
+    text << "\t float2 parallax_uv = texcoord" << map_index_height << ".xy;\n";
+    text << "\t float parallax_height = ";
+    text << height_sample_as_string(height_tex, map_index_height, "parallax_uv");
+    text << ";\n";
+    text << "\t float3 parallax_view_dir = normalize(l_eyevec);\n";
+    text << "\t float2 parallax_max_offset = parallax_view_dir.xy * (";
+    text << parallax_mapping_scale;
+    text << " / max(abs(parallax_view_dir.z), 0.1f));\n";
+    text << "\t float2 parallax_step = parallax_max_offset / " << num_samples;
+    text << ".0f;\n";
+    text << "\t float parallax_layer_depth = 0.0f;\n";
+    text << "\t float parallax_cur_depth = 0.0f;\n";
+    text << "\t float parallax_prev_depth = 0.0f;\n";
+    text << "\t float2 parallax_cur_uv = parallax_uv;\n";
+    text << "\t float2 parallax_prev_uv = parallax_uv;\n";
+    text << "\t float parallax_cur_height = parallax_height;\n";
+    text << "\t float parallax_prev_height = parallax_height;\n";
+
+    // March along the view ray until the height field is crossed.  The loop
+    // is unrolled to avoid relying on dynamic branching support.
+    for (int j = 0; j < num_samples; ++j) {
+      text << "\t if (parallax_layer_depth < parallax_cur_height) {\n";
+      text << "\t   parallax_prev_uv = parallax_cur_uv;\n";
+      text << "\t   parallax_prev_height = parallax_cur_height;\n";
+      text << "\t   parallax_prev_depth = parallax_cur_depth;\n";
+      text << "\t   parallax_cur_uv -= parallax_step;\n";
+      text << "\t   parallax_layer_depth += 1.0f / " << num_samples << ".0f;\n";
+      text << "\t   parallax_cur_depth = parallax_layer_depth;\n";
+      text << "\t   parallax_cur_height = ";
+      text << height_sample_as_string(height_tex, map_index_height,
+                                     "parallax_cur_uv");
+      text << ";\n";
+      text << "\t }\n";
     }
 
+    // Refine the intersection between the previous and current layer.
+    text << "\t float parallax_before = parallax_prev_height - parallax_prev_depth;\n";
+    text << "\t float parallax_after = parallax_cur_height - parallax_cur_depth;\n";
+    text << "\t float parallax_weight = saturate(-parallax_after / max(parallax_before - parallax_after, 1e-4f));\n";
+    text << "\t float2 parallax_offset = parallax_uv - lerp(parallax_cur_uv, parallax_prev_uv, parallax_weight);\n";
+  }
+  for (size_t i = 0; i < key._textures.size(); ++i) {
+    const ShaderKey::TextureInfo &tex = key._textures[i];
+    if (tex._mode == TextureStage::M_modulate && tex._flags == 0) {
+      // Skip this stage.
+      continue;
+    }
+    if ((tex._flags & ShaderKey::TF_map_height) != 0 &&
+        (tex._flags & ShaderKey::TF_map_normal) == 0) {
+      // A height-only map is not used to shade the surface.
+      continue;
+    }
+    if (use_parallax) {
+      // Shift the lookup for every visible texture, including a packed
+      // normal/height map, to the point where the view ray intersects the
+      // height field.
+      text << "\t texcoord" << i << ".xy -= parallax_offset;\n";
+    }
     text << "\t float4 tex" << i << " = tex" << texture_type_as_string(tex._type);
+    if (tex._type == Texture::TT_2d_texture) {
+      text << "proj";
+    }
     text << "(tex_" << i << ", texcoord" << i << ".";
     switch (tex._type) {
     case Texture::TT_cube_map_array:
@@ -1310,6 +1381,8 @@ synthesize_shader(const RenderState *rs, const GeomVertexAnimationSpec &anim) {
       text << "xyz";
       break;
     case Texture::TT_2d_texture:
+      text << "xyw";
+      break;
     case Texture::TT_1d_texture_array:
       text << "xy";
       break;
@@ -1320,67 +1393,7 @@ synthesize_shader(const RenderState *rs, const GeomVertexAnimationSpec &anim) {
     default:
       break;
     }
-    text << ");\n\t float3 parallax_offset = l_eyevec.xyz * (tex" << i;
-    if (tex._mode == TextureStage::M_normal_height ||
-        (tex._flags & ShaderKey::TF_has_alpha) != 0) {
-      text << ".aaa";
-    } else {
-      text << ".rgb";
-    }
-    text << " * 2.0 - 1.0) * " << parallax_mapping_scale << ";\n";
-    // Additional samples
-    for (int j = 0; j < parallax_mapping_samples - 1; ++j) {
-      text << "\t parallax_offset = l_eyevec.xyz * (parallax_offset + (tex" << i;
-      if (tex._mode == TextureStage::M_normal_height ||
-          (tex._flags & ShaderKey::TF_has_alpha) != 0) {
-        text << ".aaa";
-      } else {
-        text << ".rgb";
-      }
-      text << " * 2.0 - 1.0)) * " << 0.5 * parallax_mapping_scale << ";\n";
-    }
-  }
-  for (size_t i = 0; i < key._textures.size(); ++i) {
-    ShaderKey::TextureInfo &tex = key._textures[i];
-    if (tex._mode == TextureStage::M_modulate && tex._flags == 0) {
-      // Skip this stage.
-      continue;
-    }
-    if ((tex._flags & ShaderKey::TF_map_height) == 0) {
-      // Parallax mapping pushes the texture coordinates of the other textures
-      // away from the camera.
-      if (key._texture_flags & ShaderKey::TF_map_height) {
-        text << "\t texcoord" << i << ".xyz -= parallax_offset;\n";
-      }
-      text << "\t float4 tex" << i << " = tex" << texture_type_as_string(tex._type);
-      if (tex._type == Texture::TT_2d_texture) {
-        text << "proj";
-      }
-      text << "(tex_" << i << ", texcoord" << i << ".";
-      switch (tex._type) {
-      case Texture::TT_cube_map_array:
-        text << "xyzw";
-        break;
-      case Texture::TT_cube_map:
-      case Texture::TT_3d_texture:
-      case Texture::TT_2d_texture_array:
-        text << "xyz";
-        break;
-      case Texture::TT_2d_texture:
-        text << "xyw";
-        break;
-      case Texture::TT_1d_texture_array:
-        text << "xy";
-        break;
-      case Texture::TT_1d_texture:
-      case Texture::TT_buffer_texture:
-        text << "x";
-        break;
-      default:
-        break;
-      }
-      text << ");\n";
-    }
+    text << ");\n";
   }
   if (need_tangents) {
     text << "\t // Translate tangent-space normal in map to view-space.\n";
@@ -2050,6 +2063,57 @@ texture_type_as_string(Texture::TextureType ttype) {
     pgraphnodes_cat.error() << "Unsupported texture type!\n";
     return "2D";
   }
+}
+
+/**
+ * Returns a fragment shader expression that samples the given texture at the
+ * indicated texture coordinate variable.
+ */
+std::string ShaderGenerator::
+texture_sample_as_string(const ShaderKey::TextureInfo &info, short texindex,
+                         const std::string &texcoord) {
+  std::ostringstream sample;
+  sample << "tex" << texture_type_as_string(info._type);
+  sample << "(tex_" << texindex << ", " << texcoord << ".";
+  switch (info._type) {
+  case Texture::TT_cube_map_array:
+    sample << "xyzw";
+    break;
+  case Texture::TT_cube_map:
+  case Texture::TT_3d_texture:
+  case Texture::TT_2d_texture_array:
+    sample << "xyz";
+    break;
+  case Texture::TT_2d_texture:
+  case Texture::TT_1d_texture_array:
+    sample << "xy";
+    break;
+  case Texture::TT_1d_texture:
+  case Texture::TT_buffer_texture:
+    sample << "x";
+    break;
+  default:
+    break;
+  }
+  sample << ")";
+  return sample.str();
+}
+
+/**
+ * Returns a fragment shader expression that evaluates the height value of the
+ * given height map at the indicated texture coordinate variable.
+ */
+std::string ShaderGenerator::
+height_sample_as_string(const ShaderKey::TextureInfo &info, short texindex,
+                        const std::string &texcoord) {
+  std::string sample = texture_sample_as_string(info, texindex, texcoord);
+  if (info._mode == TextureStage::M_normal_height ||
+      (info._flags & ShaderKey::TF_has_alpha) != 0) {
+    sample += ".a";
+  } else {
+    sample += ".r";
+  }
+  return sample;
 }
 
 /**

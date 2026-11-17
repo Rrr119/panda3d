@@ -1,0 +1,17 @@
+{
+  "root": "/home/dev/feedback/uid23216",
+  "B": "/home/dev/feedback/uid23216",
+  "sha": "ec9ea0a93a7de249efea3f41b4fdf878f5e1650b",
+  "wslDistro": "Ubuntu-26.04",
+  "source": {
+    "owner": "panda3d",
+    "repo": "panda3d",
+    "sha": "ec9ea0a93a7de249efea3f41b4fdf878f5e1650b"
+  },
+  "fork": {
+    "owner": "Rrr119",
+    "repo": "panda3d",
+    "cloneUrl": "https://github.com/Rrr119/panda3d.git"
+  },
+  "at": "2026-11-17T03:30:37.194Z"
+}
